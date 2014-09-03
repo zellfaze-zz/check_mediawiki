@@ -1,0 +1,11 @@
+check_mediawiki
+===============
+
+This is a Nagios plugin meant to allow you to check that a Mediawiki
+installation is still running and that it is running the newest version of
+Mediawiki.  This plugin issues a critical alert if it can't find Mediawiki,
+a Warning alert if Mediawiki is out of date, and an Unknown alert for any other
+problems.
+
+To determine the most recent version of Mediawiki this plugin checks the
+Mediawiki item on Wikidata.
