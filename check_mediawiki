@@ -1,0 +1,215 @@
+#!/usr/bin/php
+<?php
+/*
+================================================================================
+Copyright (c) 2014, Derric Atzrott
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+      LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+     CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+   SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+   INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+                              OF SUCH DAMAGE.
+================================================================================
+*/
+
+//Requires cURL and JSON extensions
+
+if (PHP_SAPI != "cli") {
+  exit;
+}
+
+$optionsArray = array();
+$optionsArray[] = 'version';    //V
+$optionsArray[] = 'help';       //h
+$optionsArray[] = 'verbose';    //v
+$optionsArray[] = 'timeout:';   //t
+$optionsArray[] = 'warning::';  //w
+$optionsArray[] = 'critical::'; //c
+$optionsArray[] = 'hostname:';  //H
+$optionsArray[] = 'port:';      //p
+$optionsArray[] = 'path:';      //P
+
+$options = getopt('Vhvt::w::c::H:p:P:', $optionsArray);
+
+if ((count($argv) == 1) || ($argv[1] == '-?')) {
+ echo 'Usage:' . "\n";
+ echo '  check_mediawiki --hostname www.example.com --port 80 --path /wiki/api.php' . "\n";
+ echo '  check_mediawiki -Hwww.example.com -p80 -P/wiki/api.php' . "\n";
+ exit;
+}
+
+if (isset($options['version'])) {
+  echo 'Mediawiki status and version checker plugin for Nagios' . "\n";
+  echo '  Version 1.0.0' . "\n";
+  echo '  (c) Derric Atzrott 2014' . "\n";
+  echo "\n";
+  echo 'This software is licensed under the 2-Clause BSD Licnese.  See the top' . "\n";
+  echo '  of this script\'s source code for more information.' . "\n";
+}
+
+
+
+class mediawikiNagios {
+  public static $timeout = 30;
+  
+  public static function getMediawikiVersion($specialApiUrl) {
+    $apiOutput = self::getDataFromURL($specialApiUrl . '?action=query&meta=siteinfo&siprop=general&format=xml');
+    
+    $matches = array();
+    $status = preg_match('/generator="MediaWiki (\d+\.\d+\.\d+)"/', $apiOutput, $matches);
+    
+    if (($status === false) || ($status === 0)) {
+      throw new Exception('Could not find generator in API!');
+    }
+    
+    if (isset($matches[1]) == false) {
+      throw new Exception('Could not determine Mediawiki version!');
+    }
+    
+    return $matches[1];
+  }
+  
+  public static function getNewestMediawikiVersion($url = 'http://www.wikidata.org/wiki/Special:EntityData/Q83.json', $q = 'Q83', $p = 'P348') {
+    $apiOutput = self::getDataFromURL($url);
+    
+    $json = json_decode($apiOutput, true);
+    $values = $json['entities'][$q]['claims'][$p];
+    
+    if (count($values == 1)) {
+      return self::checkMediawikiVersion($values[0]['mainsnak']['datavalue']['value']);
+    }
+    
+    //Handle multiple possible values by trying to find a preferred ranked one
+    $highRanking = array();
+    foreach ($values as $value) {
+      if ($value['rank'] = 'preferred') {
+        $highRanking[] = $value;
+      }
+    }
+    
+    if (count($highRanking) !== 0) {
+      return self::checkMediawikiVersion($highRanking[0]['mainsnak']['datavalue']['value']);
+    } else {
+      return self::checkMediawikiVersion($values[0]['mainsnak']['datavalue']['value']);
+    }
+  }
+  
+  //Simply throws an exception if the string isn't in the format X.X.X
+  //  otherwise just returns the version string back
+  private static function checkMediawikiVersion($versionString, $throwException = true) {
+    $match = preg_match('/\d+\.\d+\.\d+/', $versionString);
+    
+    if (($match === false) || ($match === 0)) {
+      if ($throwException == true) {
+        throw new Exception('Mediawiki version is in the wrong format!');
+      } else {
+        return false;
+      }
+    }
+    
+    return $versionString;
+  }
+  
+  private static function getDataFromURL($url, $failOnURL = true, $failOnStatus = true, $failOnRedirect = true, $failOnBlank = true) {
+    $ch = curl_init($url);
+
+    curl_setopt($ch, CURLOPT_HEADER, false);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, self::$timeout);
+
+    $output = curl_exec($ch);
+    $curlInfo = curl_getinfo($ch);
+    curl_close($ch);
+    
+    if ($output === false) {
+      throw new Exception('Could not connect to server!');
+    }
+    
+    if ($failOnURL && ($curlInfo['url'] != $url)) {
+      throw new Exception('Wrong URL!');
+    }
+    
+    if ($failOnStatus && ($curlInfo['http_code'] != 200)) {
+      throw new Exception('Server did not return 200 status!');
+    }
+    
+    if ($failOnRedirect && ($curlInfo['redirect_count'] != 0)) {
+      throw new Exception('Server appears to be redirecting queries!');
+    }
+    
+    if ($failOnBlank && ($curlInfo['size_download'] == 0)) {
+      throw new Exception('Server is returning blank messages!');
+    }
+        
+    return $output;
+  }
+  
+  //Follows convention of usort() callbacks for return values
+  public static function compareVersions($version1, $version2) {
+    $version1Array = explode('.', $version1);
+    $version2Array = explode('.', $version2);
+    
+    //There has got to be a better way to do this...
+    if ($version1Array[0] < $version2Array[0]) {
+      return -1;
+    }
+    
+    if ($version1Array[0] > $version2Array[0]) {
+      return 1;
+    }
+    
+    if ($version1Array[0] == $version2Array[0]) {
+      if ($version1Array[1] < $version2Array[1]) {
+        return -1;
+      }
+      
+      if ($version1Array[1] > $version2Array[1]) {
+        return 1;
+      }
+      
+      if ($version1Array[1] == $version2Array[1]) {
+        if ($version1Array[2] < $version2Array[2]) {
+          return -1;
+        }
+        
+        if ($version1Array[2] > $version2Array[2]) {
+          return 1;
+        }
+        
+        if ($version1Array[2] == $version2Array[2]) {
+          return 0;
+        }
+      }
+    }
+    
+    throw new Exception('Could not compare versions!');
+  }
+  
+  public static function mediawikiUpToDate($url) {
+    $version1 = mediawikiNagios::getMediawikiVersion($url);
+    $version2 = mediawikiNagios::getNewestMediawikiVersion();
+
+    if (mediawikiNagios::compareVersions($version1, $version2) == -1) {
+      return false;
+    } else {
+      return true;
+    }
+  }
+}
