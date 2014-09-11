@@ -9,3 +9,7 @@ problems.
 
 To determine the most recent version of Mediawiki this plugin checks the
 Mediawiki item on Wikidata.
+
+Note: This plugin is currently not finished.  All of the code for checking that
+Mediawiki is online and up-to-date is in place, but the actual Nagios plugin
+bit still needs some work.
